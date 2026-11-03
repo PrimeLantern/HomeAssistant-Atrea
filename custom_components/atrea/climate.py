@@ -94,7 +94,6 @@ class AtreaDevice(ClimateEntity):
         self.data = hass.data[DOMAIN][entry.entry_id]
         self.atrea = self.data["atrea"]
         self._coordinator = self.data["coordinator"]
-        self._userLabels = self.data["userLabels"]
         self.ip = entry.data.get(CONF_IP_ADDRESS)
         self.updatePending = False
         self._preset_list = []
@@ -163,6 +162,11 @@ class AtreaDevice(ClimateEntity):
 
     def getUniqueID(self):
         return slugify(f"atrea_{self.ip}")
+
+    @property
+    def _userLabels(self):
+        # vždy aktuální (coordinator při refreshi slovník nahrazuje)
+        return self.data.get("userLabels") or {}
 
     @property
     def _status(self):

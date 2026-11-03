@@ -9,6 +9,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.exceptions import ConfigEntryNotReady
 from pyatrea import Atrea
 
+from . import rd5
 from .utils import update_listener
 from .const import DOMAIN, LOGGER, MIN_TIME_BETWEEN_SCANS
 
@@ -50,7 +51,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         hass.data[DOMAIN][entry.entry_id]["supportedModes"] = (
             await hass.async_add_executor_job(atrea.getSupportedModes)
         ).items()
-        hass.data[DOMAIN][entry.entry_id]["userLabels"] = (
+        hass.data[DOMAIN][entry.entry_id]["userLabels"] = rd5.decode_labels(
             await hass.async_add_executor_job(atrea.loadUserLabels)
         )
         hass.data[DOMAIN][entry.entry_id]["supportedForcedModes"] = (
@@ -85,7 +86,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
             "supportedModes": (
                 await hass.async_add_executor_job(atrea.getSupportedModes)
             ).items(),
-            "userLabels": (await hass.async_add_executor_job(atrea.loadUserLabels)),
+            "userLabels": rd5.decode_labels(
+                await hass.async_add_executor_job(atrea.loadUserLabels)
+            ),
             "supportedForcedModes": (
                 await hass.async_add_executor_job(atrea.getSupportedForcedModes)
             ).items(),

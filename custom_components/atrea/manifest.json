@@ -10,7 +10,7 @@
   "requirements": [
     "pyatrea @ git+https://github.com/mposchl/pyatrea.git@master"
   ],
-  "version": "6.1.8-cz28-rk5",
+  "version": "6.1.8-cz29-rk5",
   "config_flow": true,
   "homeassistant": "2022.4.0"
 }

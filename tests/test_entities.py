@@ -134,7 +134,7 @@ def make(status=None):
     atrea = FakeAtrea()
     data = {
         "atrea": atrea, "coordinator": FakeCoordinator(), "status": status or load_status(),
-        "userLabels": {"Z1Text": "Přízemí"}, "model": None, "params": None,
+        "userLabels": {"Z1Text": "Přízemí", "Z3Text": "Celý dům"}, "model": None, "params": None,
         "supportedModes": [(i, True) for i in range(8)],
     }
     hass = FakeHass()
@@ -216,7 +216,7 @@ def test_fan_off_turns_unit_off():
 def test_zone_select():
     dev, atrea, data = make()
     z = select.AtreaZoneSelect(data, Entry())
-    assert z.options == ["Přízemí", "Zóna 2", "Zóna 1+2"] and z.current_option == "Zóna 1+2"
+    assert z.options == ["Přízemí", "Zóna 2", "Celý dům"] and z.current_option == "Celý dům"
     run(z.async_select_option("Přízemí"))
     assert atrea.sent[-1] == {"H10711": "00000"}
 
