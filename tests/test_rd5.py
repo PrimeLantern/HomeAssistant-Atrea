@@ -72,3 +72,12 @@ def test_temperatures():
 def test_flows_and_hours():
     assert rd5.flow_for_value(S, 36) == {"circulation": 600, "ventilation": 100}
     assert rd5.decode_u32(S, "H13500", "H13501") == 8100
+
+
+def test_decode_label_js_escape():
+    assert rd5.decode_label("Cel%FD%20d%u016Fm") == "Celý dům"
+    assert rd5.decode_label("P%u0159%EDzem%ED") == "Přízemí"
+    assert rd5.decode_label("Zona%201") == "Zona 1"
+    assert rd5.decode_label("Cel%C3%BD") == "Celý"  # UTF-8 percent-encoding
+    assert rd5.decode_label("Obývák") == "Obývák"
+    assert rd5.decode_labels({"Z3Text": "Cel%FD%20d%u016Fm"}) == {"Z3Text": "Celý dům"}

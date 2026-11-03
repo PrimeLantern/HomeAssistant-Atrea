@@ -23,6 +23,9 @@ Klíčová pozorování na jednotce Duplex R-5 RK5 (H10510=4, C10509=1):
 
 from __future__ import annotations
 
+import re
+from urllib.parse import unquote
+
 LEVELS = ("Min", "Norm", "Max")
 OFF_LABEL = "Vypnuto"
 
@@ -96,6 +99,40 @@ TODA_AVG_LABELS = {
     6: "3 dny", 7: "4 dny", 8: "5 dní", 9: "6 dní", 10: "7 dní",
     11: "8 dní", 12: "9 dní", 13: "10 dní",
 }
+
+
+# --------------------------------------------------------------------------
+# Uživatelské texty (config/texts.xml)
+# --------------------------------------------------------------------------
+_JS_UNICODE = re.compile(r"%u([0-9A-Fa-f]{4})")
+_JS_BYTE = re.compile(r"%([0-9A-Fa-f]{2})")
+
+
+def decode_label(text):
+    """Dekóduje text uložený web UI funkcí JS escape().
+
+    escape() kóduje znaky do U+00FF jako %XX (Latin-1, ne UTF-8!) a vyšší jako
+    %uXXXX, např. "Cel%FD%20d%u016Fm" → "Celý dům". Pokud text vypadá jako
+    UTF-8 percent-encoding (%C3%BD…), použije se standardní unquote.
+    """
+    if not isinstance(text, str) or "%" not in text:
+        return text
+    if not _JS_UNICODE.search(text):
+        try:
+            utf8 = unquote(text, encoding="utf-8", errors="strict")
+            if utf8 != text and any(ord(c) > 0x7F for c in utf8):
+                return utf8
+        except UnicodeDecodeError:
+            pass
+    text = _JS_UNICODE.sub(lambda m: chr(int(m.group(1), 16)), text)
+    return _JS_BYTE.sub(lambda m: chr(int(m.group(1), 16)), text)
+
+
+def decode_labels(labels):
+    """Dekóduje všechny hodnoty slovníku uživatelských textů."""
+    if not labels:
+        return {} if labels is None else labels
+    return {k: decode_label(v) for k, v in labels.items()}
 
 
 # --------------------------------------------------------------------------
