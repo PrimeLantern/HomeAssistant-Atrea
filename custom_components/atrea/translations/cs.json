@@ -82,7 +82,13 @@
         "name": "Nevyrovnaný průtok"
       },
       "night_precooling_available": {
-        "name": "Noční předchlazení možné"
+        "name": "Netopná sezóna (předchlazení povoleno)"
+      },
+      "hp_heating": {
+        "name": "TČ topí (SE)"
+      },
+      "hp_cooling": {
+        "name": "TČ chladí (SC)"
       }
     },
     "button": {
@@ -123,6 +129,42 @@
       },
       "flow_oda_act": {
         "name": "Aktuální průtok venkovní (ODA)"
+      },
+      "m1_voltage": {
+        "name": "Napětí ventilátoru M1"
+      },
+      "m2_voltage": {
+        "name": "Napětí ventilátoru M2"
+      },
+      "extract_temp": {
+        "name": "Teplota odtah (ETA)"
+      },
+      "exhaust_temp": {
+        "name": "Teplota odpadní (EHA)"
+      },
+      "outdoor_temp_avg": {
+        "name": "Venkovní teplota průměrná"
+      },
+      "current_phase": {
+        "name": "Aktuální fáze režimu"
+      },
+      "season": {
+        "name": "Sezóna"
+      },
+      "season_switch": {
+        "name": "Přepínání TS/NTS"
+      },
+      "toda_avg_interval": {
+        "name": "Interval průměrování T-ODA"
+      },
+      "m1_hours": {
+        "name": "Provozní hodiny M1"
+      },
+      "m2_hours": {
+        "name": "Provozní hodiny M2"
+      },
+      "season_temp": {
+        "name": "Teplota přepnutí TS/NTS"
       }
     },
     "climate": {
@@ -140,6 +182,22 @@
             "name": "Předvolba"
           }
         }
+      }
+    },
+    "select": {
+      "zone": {
+        "name": "Zóna"
+      }
+    },
+    "number": {
+      "hyst_heat": {
+        "name": "Hystereze topení"
+      },
+      "hyst_cool": {
+        "name": "Hystereze chlazení"
+      },
+      "offset_cool": {
+        "name": "Posun chlazení"
       }
     }
   }

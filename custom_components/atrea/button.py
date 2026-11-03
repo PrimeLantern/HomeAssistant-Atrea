@@ -5,9 +5,8 @@ Z RD5 specs:
   (defaultně 90 dní). User stiskne po fyzické výměně filtru → RD5 restartuje
   clock a D11183 přepne zpět na 0.
 - C10005: zapsání 1 provede reset alarmů (např. nevyrovnaný průtok D11114).
-  Tohle reálně používá web UI (`xml.cgi?...&C1000500001`). POZOR: v RD5 PDF
-  dokumentaci NENÍ — dokumentace uvádí C10006 „reset vybraných alarmů", ale ten
-  D11114 neshodí. C10005 (z odposlechu UI) funguje. User stiskne po odstranění
+  Tohle reálně používá web UI (`xml.cgi?...&C1000500001`) a je to uvedeno
+  i v RD5 Modbus tabulce (tab.10, vydání 11/2021). User stiskne po odstranění
   příčiny, aby se jednotka znovu spustila.
 """
 

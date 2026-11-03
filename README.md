@@ -14,6 +14,30 @@ Fork od [JurajNyiri/HomeAssistant-Atrea](https://github.com/JurajNyiri/HomeAssis
 
 **Backward compatibility:** Jednotky Duplex (H10510 ∈ {0, 1, 2, 3}) zachovávají původní procentuální logiku — nic se pro ně nemění.
 
+## Úpravy pro Duplex R-5 RK5 (RD5, provoz 2Z)
+
+Ověřeno offline nad exportem stavu jednotky Duplex R-5 RK5 typ 1, FW 2.03.41
+(`H10510=4`, `C10509=1`). Komunikace zůstává přes HTTP (pyatrea, `xml.cgi`).
+
+- **Předvolba** se čte z `H10715` (požadovaný režim), ne z `H10705`. `H10705`
+  je aktuální fáze — v Automatu se střídá Větrání/Cirkulace. Je vidět jako
+  atribut `current_phase` a senzor „Aktuální fáze režimu".
+- **Výkon** se čte z `H10714` (požadovaný), `H10704` je výkon aktuální fáze.
+- **Sady výkonu podle režimu** přesně jako web UI (`mode2Z()` ve scripts.js):
+  Vypnuto → 0, Cirkulace → 20–22, Automat a Cirkulace s větráním → 30–38
+  (cirkulace/větrání), ostatní → 10–12. Atributy `fan_flow_*` ukazují m³/h
+  podle `H11627–H11632`.
+- **Zápisy jako web UI**: výkon `H10708`, režim `H10709`, teplota `H10710`,
+  zóna `H10711`; při Týdenním programu se přidá `2` (Dočasné) jen do příslušné
+  rutiny `H10700–H10703`. Režim + převedený výkon jdou v jedné relaci.
+- **Teploty** jako int16 (záporné u všech čidel), `1260` = nepřipojené čidlo.
+- Nové entity: zóna (select), hystereze topení/chlazení a posun chlazení
+  (number), teploty ETA/EHA/průměrná T-ODA, napětí M1/M2, provozní hodiny
+  M1/M2, sezóna, přepínání TS/NTS, interval průměrování, TČ topí/chladí.
+- `I11401` je aktuální sezóna (0 topná / 1 netopná), binární senzor přejmenován.
+
+Testy: `python -m pytest tests` (bez sítě a bez Home Assistant).
+
 ## Instalace přes HACS
 
 1. HACS → Integrations → ⋮ → **Custom repositories**

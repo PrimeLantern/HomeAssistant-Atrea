@@ -5,7 +5,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.util import slugify
 from homeassistant.components.climate.const import HVACAction
 
-
 from .utils import processFanModes
 
 try:
@@ -15,9 +14,7 @@ except ImportError:
         ClimateDevice as ClimateEntity,
         PLATFORM_SCHEMA,
     )
-from homeassistant.components.climate.const import (
-    HVACMode
-)
+from homeassistant.components.climate.const import HVACMode
 from homeassistant.const import (
     CONF_NAME,
     CONF_IP_ADDRESS,
@@ -25,10 +22,10 @@ from homeassistant.const import (
     ATTR_TEMPERATURE,
 )
 from homeassistant.util import Throttle
-from homeassistant.helpers import device_registry as dr
 from typing import Callable
 from pyatrea import AtreaProgram, AtreaMode
 
+from . import rd5
 from .const import (
     DOMAIN,
     LOGGER,
@@ -43,12 +40,10 @@ from .const import (
     PRESET_LABELS_CZ,
     ICONS,
     HVAC_MODES,
-    CONTROL_MODE_R_5,
-    r5_decode_fan_value,
-    r5_fan_modes_for_preset,
-    r5_fan_value_for_preset,
-    r5_map_power_to_preset,
 )
+
+# Režimy, které lze na RD5 zapisovat do H10709 (0..7).
+WRITABLE_MODE_MAX = 7
 
 
 def _to_cz(preset_en):
@@ -75,7 +70,6 @@ async def async_setup_entry(
     if fan_list is None:
         fan_list = DEFAULT_FAN_MODE_LIST
 
-    # todo: verify this works with options
     preset_list = entry.data.get(CONF_PRESETS)
     if preset_list is None:
         preset_list = {}
@@ -108,16 +102,19 @@ class AtreaDevice(ClimateEntity):
         self._name = sensor_name
         self._current_fan_mode = None
         self._alerts = []
-        self._outside_temp = 0.0
-        self._inside_temp = 0.0
-        self._supply_air_temp = 0.0
-        self._exhaust_temp = 0.0
-        self._extract_temp = 0.0
-        self._requested_temp = 0.0
+        self._outside_temp = None
+        self._inside_temp = None
+        self._supply_air_temp = None
+        self._exhaust_temp = None
+        self._extract_temp = None
+        self._requested_temp = None
         self._requested_power = None
         self._active_inputs = []
         self._forced_mode = None
         self._current_power = None
+        self._current_phase = None
+        self._zone = None
+        self._fan_flow = {}
 
         self._current_preset = None
         self._current_hvac_mode = None
@@ -125,24 +122,19 @@ class AtreaDevice(ClimateEntity):
         self._enabled = False
         self._cooling = -1
         self._heating = -1
+        self._last_on_mode = rd5.MODE_VENTILATION
 
-        # custom
         self._da1 = 0.0
 
-        # R_5 detection — read H10510 control mode register.
-        # Pokud je 4 (R_5 series), použijeme discrete fan modes místo procent.
-        try:
-            control_mode_val = self.atrea.getValue("H10510")
-            self._control_mode = int(control_mode_val) if control_mode_val is not None else CONTROL_MODE_R_5
-        except Exception:
-            self._control_mode = CONTROL_MODE_R_5  # fallback for R_5 (most common new units)
-
-        self._is_r5 = self._control_mode == CONTROL_MODE_R_5
+        # R_5 detekce: H10510=4 nebo provoz 2Z (C10509=1). Bez fallbacku na
+        # R_5 — Duplex jednotky musí zůstat na procentech.
+        self._is_r5 = rd5.is_r5(self.data.get("status"))
 
         self.updatePresetList(preset_list, False)
         self.updateFanList(fan_list, False)
         self.manualUpdate(False)
 
+    # ------------------------------------------------------------------
     def updatePresetList(self, preset_list, updateState=True):
         self._preset_list = []
         for required_preset in preset_list:
@@ -173,6 +165,19 @@ class AtreaDevice(ClimateEntity):
         return slugify(f"atrea_{self.ip}")
 
     @property
+    def _status(self):
+        return self.data.get("status") or {}
+
+    def _required_mode(self):
+        return rd5.required_mode(self._status)
+
+    def _group(self, mode=None):
+        if mode is None:
+            mode = self._required_mode()
+        return rd5.power_group(self._status, mode)
+
+    # ------------------------------------------------------------------
+    @property
     def brand(self):
         return "ATREA s.r.o."
 
@@ -202,8 +207,7 @@ class AtreaDevice(ClimateEntity):
     def icon(self):
         if len(self._alerts) > 0:
             return "mdi:fan-alert"
-        # Off detection: R_5 mode = "Vypnuto", Duplex = "0%"
-        elif self.fan_mode in ("0%", "Vypnuto"):
+        elif self.fan_mode in ("0%", rd5.OFF_LABEL):
             return "mdi:fan-off"
         elif self._current_preset in ICONS:
             return ICONS[self._current_preset]
@@ -231,16 +235,26 @@ class AtreaDevice(ClimateEntity):
         attributes["supply_air_temp"] = self._supply_air_temp
         attributes["requested_temp"] = self._requested_temp
         attributes["exhaust_temp"] = self._exhaust_temp
-        attributes["extract_temp"]= self._extract_temp
+        attributes["extract_temp"] = self._extract_temp
         attributes["requested_power"] = self._requested_power
         attributes["warnings"] = self._warnings
         attributes["alerts"] = self._alerts
         attributes["program"] = self.air_handling_control
         attributes["active_inputs"] = self._active_inputs
-        attributes["forced_mode"] = self._forced_mode.name
+        attributes["forced_mode"] = (
+            self._forced_mode.name if self._forced_mode is not None else None
+        )
         attributes["current_power"] = self._current_power
-
         attributes["current_da1_output"] = self._da1
+
+        if self._is_r5:
+            # Aktuálně běžící fáze (v Automatu se střídá větrání/cirkulace)
+            attributes["current_phase"] = rd5.MODE_LABELS.get(
+                self._current_phase, self._current_phase
+            )
+            attributes["zone"] = self._zone
+            attributes["fan_flow_circulation"] = self._fan_flow.get("circulation")
+            attributes["fan_flow_ventilation"] = self._fan_flow.get("ventilation")
 
         if self._heating == 1:
             attributes["hvac_action"] = HVACAction.HEATING
@@ -248,8 +262,6 @@ class AtreaDevice(ClimateEntity):
             attributes["hvac_action"] = HVACAction.COOLING
         elif self._current_hvac_mode == HVACMode.OFF:
             attributes["hvac_action"] = HVACAction.OFF
-        elif "hvac_action" in attributes:
-            del attributes["hvac_action"]
         return attributes
 
     @property
@@ -258,7 +270,11 @@ class AtreaDevice(ClimateEntity):
 
     @property
     def target_temperature(self):
-        return float(self._requested_temp)
+        return self._requested_temp
+
+    @property
+    def target_temperature_step(self):
+        return 0.5
 
     @property
     def hvac_modes(self):
@@ -269,7 +285,21 @@ class AtreaDevice(ClimateEntity):
         return self._current_hvac_mode
 
     @property
+    def hvac_action(self):
+        if self._current_hvac_mode == HVACMode.OFF:
+            return HVACAction.OFF
+        if self._heating == 1:
+            return HVACAction.HEATING
+        if self._cooling == 1:
+            return HVACAction.COOLING
+        if self._heating == -1 and self._cooling == -1:
+            return None
+        return HVACAction.FAN
+
+    @property
     def preset_mode(self):
+        if self._current_preset is None:
+            return STATE_UNKNOWN
         if self._current_preset.name and self._current_preset.name in self._userLabels:
             return self._userLabels[self._current_preset.name]
         elif self._current_preset < len(ALL_PRESET_LIST):
@@ -283,7 +313,7 @@ class AtreaDevice(ClimateEntity):
 
     @property
     def current_temperature(self):
-        return float(self._inside_temp)
+        return self._inside_temp
 
     @property
     def min_temp(self):
@@ -300,17 +330,14 @@ class AtreaDevice(ClimateEntity):
     @property
     def fan_modes(self):
         if self._is_r5:
-            # Dynamic per-preset list — fan modes záleží na aktuálním presetu
-            current_preset_en = None
-            if self._current_preset is not None and self._current_preset < len(ALL_PRESET_LIST):
-                current_preset_en = ALL_PRESET_LIST[self._current_preset]
-            return r5_fan_modes_for_preset(current_preset_en)
+            return list(rd5.group_values(self._group()).keys())
         return self._fan_list
 
     @property
     def program(self):
         return self.air_handling_control
 
+    # ------------------------------------------------------------------
     @Throttle(MIN_TIME_BETWEEN_SCANS)
     async def async_update(self):
         if not self.updatePending:
@@ -328,363 +355,258 @@ class AtreaDevice(ClimateEntity):
         self._warnings = []
         self._alerts = []
         self._active_inputs = []
-        if status != False:
+        if status:
             if "I10211" in status:
-                if float(status["I10211"]) > 1300:
-                    self._outside_temp = round(
-                        ((50 - (float(status["I10211"]) - 65036) / 10) * -1), 1
-                    )
-                else:
-                    self._outside_temp = float(status["I10211"]) / 10
+                self._outside_temp = rd5.decode_temp(status["I10211"])
             elif "I00202" in status:
-                if self.atrea.getValue("I00202") == 126.0:
-                    if self.atrea.getValue("H00511") == 1:
-                        self._outside_temp = self.atrea.getValue("I00200")
-                    elif self.atrea.getValue("H00511") == 1:
-                        self._outside_temp = self.atrea.getValue("I00201")
-                else:
-                    self._outside_temp = self.atrea.getValue("I00202")
+                self._outside_temp = self.atrea.getValue("I00202")
 
-            # inside temperature is defined by T-IDA
             if "I10215" in status:
-                self._inside_temp = float(status["I10215"]) / 10
-
+                self._inside_temp = rd5.decode_temp(status["I10215"])
             if "I10212" in status:
-                self._supply_air_temp = float(status["I10212"]) / 10
+                self._supply_air_temp = rd5.decode_temp(status["I10212"])
             elif "I00200" in status:
                 self._supply_air_temp = self.atrea.getValue("I00200")
-
             if "I10214" in status:
-                self._exhaust_temp = float(status["I10214"]) / 10
-
+                self._exhaust_temp = rd5.decode_temp(status["I10214"])
             if "I10213" in status:
-                self._extract_temp = float(status["I10213"]) / 10
+                self._extract_temp = rd5.decode_temp(status["I10213"])
 
             if "H10706" in status:
-                self._requested_temp = float(status["H10706"]) / 10
+                self._requested_temp = rd5.ival(status, "H10706") / 10
             elif "H01006" in status:
                 self._requested_temp = self.atrea.getValue("H01006")
 
             if "H10714" in status:
-                self._requested_power = int(status["H10714"])
+                self._requested_power = rd5.ival(status, "H10714")
             elif "H01005" in status:
                 self._requested_power = int(self.atrea.getValue("H01005"))
 
-            if self._is_r5:
-                # R_5 mode: read H10704 → decode na discrete label.
-                # Aktuální preset (EN) pro kontextový dekód — H10704 může při
-                # přepínání ještě držet hodnotu staré předvolby (lag), pak by
-                # dekódovaná hodnota nebyla ve fan_modes → prázdný dropdown.
-                mode_now = self.atrea.getMode()
-                preset_en_now = (
-                    ALL_PRESET_LIST[mode_now]
-                    if mode_now is not None and mode_now < len(ALL_PRESET_LIST)
-                    else None
-                )
-                if "H10704" in status:
-                    self._current_fan_mode = r5_decode_fan_value(
-                        self.atrea.getValue("H10704"), preset_en_now
-                    )
-                else:
-                    self._current_fan_mode = r5_decode_fan_value(
-                        self._requested_power, preset_en_now
-                    )
+            if "H10704" in status:
+                self._current_power = rd5.ival(status, "H10704")
+
+            req_mode = self._required_mode()
+            self._current_phase = rd5.current_phase(status)
+            if req_mode is not None and req_mode <= WRITABLE_MODE_MAX:
+                self._current_preset = AtreaMode(req_mode)
+                if req_mode != rd5.MODE_OFF:
+                    self._last_on_mode = req_mode
             else:
-                # Duplex mode: zachovat procenta logiku
+                self._current_preset = self.atrea.getMode()
+
+            if self._is_r5:
+                group = self._group(req_mode)
+                power = rd5.required_power(status)
+                self._current_fan_mode = rd5.label_for_value(group, power)
+                self._fan_flow = rd5.flow_for_value(status, power, group)
+                zone = rd5.ival(status, "H10717")
+                if rd5.ival(status, "H10511") == 1 and zone is not None:
+                    self._zone = self._userLabels.get(
+                        rd5.ZONE_TEXT_KEYS.get(zone), rd5.ZONE_LABELS.get(zone)
+                    ) or rd5.ZONE_LABELS.get(zone)
+                else:
+                    self._zone = None
+            else:
                 if "H01001" in status:
                     self._current_fan_mode = str(int(self.atrea.getValue("H01001"))) + "%"
                 else:
                     self._current_fan_mode = str(self._requested_power) + "%"
 
-            if "C10215" in status:
-                self._heating = int(status["C10215"])
-            else:
+            # Topení: SE (TČ topení) nebo SA2 (sekundární/vodní ohřev) > 0
+            heating = rd5.ival(status, "C10215")
+            sa2 = rd5.ival(status, "H10203")
+            if heating is None and sa2 is None:
                 self._heating = -1
-
-            if "C10216" in status:
-                self._cooling = int(status["C10216"])
             else:
-                self._cooling = -1
+                self._heating = 1 if (heating == 1 or (sa2 or 0) > 0) else 0
+            cooling = rd5.ival(status, "C10216")
+            self._cooling = -1 if cooling is None else cooling
 
             if "H10207" in status:
-                self._da1 = float(status["H10207"]) / 1000
+                self._da1 = rd5.ival(status, "H10207") / 1000
 
-            # D1..D4 inputs are reported in D10200..D10203
             for inpt in range(4):
                 entry = f"D1020{inpt}"
-                if entry in status and int(status[entry]):
+                if rd5.ival(status, entry) == 1:
                     self._active_inputs.append(f"D{inpt + 1}")
 
             self._forced_mode = self.atrea.getForcedMode()
 
-            if "H10704" in status:
-                self._current_power = int(status["H10704"])
-
-            self._current_preset = self.atrea.getMode()
-            if self._current_preset == AtreaMode.OFF:
-                self._current_hvac_mode = HVACMode.OFF
-
-            program = self.atrea.getProgram()
-            if program == AtreaProgram.MANUAL:
+            program = rd5.program_state(status)
+            if program == rd5.PROGRAM_MANUAL:
                 self.air_handling_control = "Manual"
-                if self.atrea.getValue("H10705") == 0:
-                    self._current_hvac_mode = HVACMode.OFF
-                else:
-                    self._current_hvac_mode = HVACMode.FAN_ONLY
-            elif program == AtreaProgram.WEEKLY:
+            elif program == rd5.PROGRAM_WEEKLY:
                 self.air_handling_control = "Schedule"
-                self._current_hvac_mode = HVACMode.AUTO
-            elif program == AtreaProgram.TEMPORARY:
-                self.air_handling_control = "Temporary"
-                if self.atrea.getValue("H10705") == 0:
-                    self._current_hvac_mode = HVACMode.OFF
-                else:
-                    self._current_hvac_mode = HVACMode.FAN_ONLY
             else:
-                self.air_handling_control = "Unknown (" + str(program) + ")"
+                self.air_handling_control = "Temporary"
 
-            if self._current_fan_mode in ("0%", "Vypnuto"):
+            if req_mode == rd5.MODE_OFF or self._current_fan_mode in ("0%", rd5.OFF_LABEL):
                 self._current_hvac_mode = HVACMode.OFF
+            elif program == rd5.PROGRAM_WEEKLY:
+                self._current_hvac_mode = HVACMode.AUTO
+            else:
+                self._current_hvac_mode = HVACMode.FAN_ONLY
 
-            # todo fix warning not translated
-            params = self.atrea.getParams()
+            params = self.data.get("params") or self.atrea.getParams()
             for warning in params["warning"]:
-                if status[warning] == "1":
+                if status.get(warning) == "1":
                     self._warnings.append(self.atrea.getTranslation(warning))
-
             for alert in params["alert"]:
-                if status[alert] == "1":
+                if status.get(alert) == "1":
                     self._alerts.append(self.atrea.getTranslation(alert))
-
         else:
             self._current_hvac_mode = None
         if updateState:
             self.async_schedule_update_ha_state(True)
 
+    # ------------------------------------------------------------------
+    @property
+    def _is_rd5(self):
+        """RD5 regulace (registry H107xx). Starší RD4 jednotky mají H01xxx."""
+        return "H10709" in self._status
+
+    async def _send_legacy(self, fn, *args):
+        """Starší jednotky (RD4) — původní cesta přes pyatrea settery."""
+        self.atrea.commands.clear()
+        fn(*args)
+        self.updatePending = True
+        try:
+            await self.hass.async_add_executor_job(self.atrea.exec)
+            await self._coordinator.async_refresh()
+        finally:
+            self.updatePending = False
+        self.manualUpdate()
+
+    async def _send(self, cmds):
+        """Odešle {registr: hodnota} v jedné relaci (jeden xml.cgi request)."""
+        if not cmds:
+            return
+        LOGGER.debug("Atrea write: %s", cmds)
+        self.atrea.commands.clear()
+        for reg, val in cmds.items():
+            val = int(val)
+            if val < 0:
+                val += 65536
+            self.atrea.commands[reg] = f"{val:05}"
+        self.updatePending = True
+        try:
+            await self.hass.async_add_executor_job(self.atrea.exec)
+            await self._coordinator.async_refresh()
+            await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
+        finally:
+            self.updatePending = False
+            self.atrea.commands.clear()
+        self.manualUpdate()
+
+    def _mode_cmds(self, mode):
+        """Zápis režimu + výkon převedený do sady nového režimu (jedna relace)."""
+        status = self._status
+        cmds = rd5.build_write(status, "mode", mode)
+        if self._is_r5 and mode != rd5.MODE_OFF:
+            old_group = self._group()
+            new_group = self._group(mode)
+            power = rd5.required_power(status)
+            if not power:
+                power = rd5.ival(status, "H10713") or rd5.ival(status, "H10708")
+            target = rd5.map_power_to_group(power, new_group, old_group)
+            if target is not None and target != rd5.ival(status, "H10708"):
+                cmds.update(rd5.build_write(status, "power", target))
+        return cmds
+
     async def async_set_fan_mode(self, fan_mode):
+        status = self._status
         if self._is_r5:
-            # R_5 mode — discrete labels (Vypnuto / Min / Norm / Max / Min/Min, ...)
-            current_preset_en = None
-            if self._current_preset is not None and self._current_preset < len(ALL_PRESET_LIST):
-                current_preset_en = ALL_PRESET_LIST[self._current_preset]
-            fan_value = r5_fan_value_for_preset(current_preset_en, fan_mode)
-            if fan_value is None:
+            group = self._group()
+            value = rd5.group_values(group).get(fan_mode)
+            if value is None:
                 LOGGER.warning(
-                    "Unsupported R_5 fan_mode='%s' for preset='%s'",
-                    fan_mode,
-                    current_preset_en,
+                    "Nepodporovaný výkon '%s' pro režim %s", fan_mode, self._required_mode()
                 )
                 return
-
-            # Začínáme čistou dávkou — pyatrea akumuluje self.commands napříč
-            # set* voláními a exec() je posílá všechna najednou. Bez clear()
-            # bychom mohli odeslat stale commands z předchozích volání.
-            self.atrea.commands.clear()
-            if (
-                await self.hass.async_add_executor_job(self.atrea.getProgram)
-                == AtreaProgram.WEEKLY
-            ):
-                self.atrea.setProgram(AtreaProgram.TEMPORARY)
-            self.atrea.setPower(fan_value)
-
-            self.updatePending = True
-            await self.hass.async_add_executor_job(self.atrea.exec)
-            await self._coordinator.async_refresh()
-            await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-            self.updatePending = False
-            self.manualUpdate()
+            if value == 0:
+                # Web UI nedovolí zapsat výkon 0 (box „Off" má rw=0) → vypnout režimem.
+                await self.async_turn_off()
+                return
+            await self._send(rd5.build_write(status, "power", value))
             return
 
-        # Duplex mode — zachovat percentual logiku
+        # Duplex — procenta
         fan_percent = int(re.sub("[^0-9]", "", fan_mode))
-        if fan_percent < 12:
-            fan_percent = 12
-        if fan_percent > 100:
-            fan_percent = 100
-        if fan_percent >= 12 and fan_percent <= 100:
-            self.atrea.commands.clear()
-            if (
-                await self.hass.async_add_executor_job(self.atrea.getProgram)
-                == AtreaProgram.WEEKLY
-            ):
-                self.atrea.setProgram(AtreaProgram.TEMPORARY)
-            self.atrea.setPower(fan_percent)
-
-            self.updatePending = True
-            await self.hass.async_add_executor_job(self.atrea.exec)
-            await self._coordinator.async_refresh()
-            await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-            self.updatePending = False
-            self.manualUpdate()
-        else:
-            LOGGER.warning("Power out of range (12,100)")
+        fan_percent = max(12, min(100, fan_percent))
+        if not self._is_rd5:
+            await self._send_legacy(self.atrea.setPower, fan_percent)
+            return
+        await self._send(rd5.build_write(status, "power", fan_percent))
 
     async def async_turn_on(self):
-        self.atrea.commands.clear()
-        if self.air_handling_control == "Manual":
-            self.atrea.setProgram(AtreaProgram.MANUAL)
-            self._current_hvac_mode = HVACMode.FAN_ONLY
-        elif self.air_handling_control == "Schedule":
-            self.atrea.setProgram(AtreaProgram.WEEKLY)
-            self._current_hvac_mode = HVACMode.AUTO
-        elif self.air_handling_control == "Temporary":
-            self.atrea.setProgram(AtreaProgram.TEMPORARY)
-            self._current_hvac_mode = HVACMode.FAN_ONLY
-        self.atrea.setMode(AtreaMode.VENTILATION)
-
-        self.updatePending = True
-        await self.hass.async_add_executor_job(self.atrea.exec)
-        await self._coordinator.async_refresh()
-        await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-        self.manualUpdate()
-        self.updatePending = False
+        if not self._is_rd5:
+            await self._send_legacy(self.atrea.setMode, AtreaMode.VENTILATION)
+            return
+        mode = self._last_on_mode or rd5.MODE_VENTILATION
+        await self._send(self._mode_cmds(mode))
 
     async def async_turn_off(self):
-        self.atrea.commands.clear()
-        if self.air_handling_control == "Manual":
-            self.atrea.setProgram(AtreaProgram.MANUAL)
-        elif self.air_handling_control == "Temporary":
-            self.atrea.setProgram(AtreaProgram.TEMPORARY)
-        else:
-            self.atrea.setProgram(AtreaProgram.WEEKLY)
-
-        self._current_hvac_mode = HVACMode.OFF
-        self.atrea.setMode(AtreaMode.OFF)
-
-        self.updatePending = True
-        await self.hass.async_add_executor_job(self.atrea.exec)
-        await self._coordinator.async_refresh()
-        await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-        self.manualUpdate()
-        self.updatePending = False
+        if not self._is_rd5:
+            await self._send_legacy(self.atrea.setMode, AtreaMode.OFF)
+            return
+        await self._send(rd5.build_write(self._status, "mode", rd5.MODE_OFF))
 
     async def async_set_hvac_mode(self, hvac_mode):
-        self.atrea.commands.clear()
-        mode = None
-        program = None
-        if hvac_mode == HVACMode.AUTO:
-            self._current_hvac_mode = HVACMode.AUTO
-            program = AtreaProgram.WEEKLY
-        elif hvac_mode == HVACMode.FAN_ONLY:
-            mode = AtreaMode.VENTILATION
-            program = AtreaProgram.MANUAL
-            self._current_hvac_mode = HVACMode.FAN_ONLY
-        elif hvac_mode == HVACMode.OFF:
+        if not self._is_rd5 and hvac_mode != HVACMode.OFF:
+            program = AtreaProgram.WEEKLY if hvac_mode == HVACMode.AUTO else AtreaProgram.MANUAL
+            await self._send_legacy(self.atrea.setProgram, program)
+            return
+        if hvac_mode == HVACMode.OFF:
             await self.async_turn_off()
-            self._current_hvac_mode = HVACMode.OFF
-
-        if program != None and program != await self.hass.async_add_executor_job(
-            self.atrea.getProgram
-        ):
-            self.atrea.setProgram(program)
-
-        if (
-            mode != None and self._current_preset != mode
-        ) or self.air_handling_control == "Schedule":
-            self.atrea.setMode(mode)
-
-        self.updatePending = True
-        await self.hass.async_add_executor_job(self.atrea.exec)
-        await self._coordinator.async_refresh()
-        await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-        self.manualUpdate()
-        self.updatePending = False
+            return
+        cmds = {}
+        if hvac_mode == HVACMode.AUTO:
+            if rd5.program_state(self._status) != rd5.PROGRAM_WEEKLY:
+                cmds = rd5.build_program(rd5.PROGRAM_WEEKLY)
+        elif hvac_mode == HVACMode.FAN_ONLY:
+            if self._required_mode() in (None, rd5.MODE_OFF):
+                cmds = self._mode_cmds(self._last_on_mode or rd5.MODE_VENTILATION)
+            # přepnutí do Ručního přepíše případné příznaky Dočasné (2) na 0
+            cmds.update(rd5.build_program(rd5.PROGRAM_MANUAL))
+        await self._send(cmds)
 
     async def async_set_preset_mode(self, preset_mode):
-        LOGGER.debug(
-            "async_set_preset_mode called with %s (is_r5=%s)",
-            preset_mode,
-            self._is_r5,
-        )
-        # UI dropdown vrací CZ label — reverse map na EN ID před lookup do AtreaMode
         preset_en = _from_cz(preset_mode)
-        mode = None
         try:
             mode = AtreaMode(ALL_PRESET_LIST.index(preset_en))
         except ValueError:
             LOGGER.warning("Chosen preset=%s is incorrect preset.", str(preset_mode))
             return
+        if int(mode) > WRITABLE_MODE_MAX:
+            LOGGER.warning("Předvolba %s je jen informativní (vnucený stav).", preset_mode)
+            return
 
-        # cz23: „Přepínám" indikátor — on po celou dobu operace (vč. 60s
-        # sync loopu níže). Sdílený flag v data dictu čte AtreaSwitchingBinarySensor.
         self.data["switching"] = True
         self._coordinator.async_update_listeners()
-
-        # Zachyť H10704 (výkon) PŘED přepnutím — z jeho úrovně (Min/Norm/Max)
-        # pak mapujeme cílový výkon nové předvolby (cz26 níže). Po setMode už
-        # by hodnota mohla být Atreou přepsaná.
-        initial_h10704_pre = None
-        if self._is_r5:
-            initial_h10704_pre = await self.hass.async_add_executor_job(
-                self.atrea.getValue, "H10704"
-            )
-            LOGGER.debug(
-                "R_5 preset switch: initial H10704 (pre-setMode) = %s",
-                initial_h10704_pre,
-            )
-
-        self.atrea.commands.clear()
-
-        if mode == AtreaMode.OFF:
-            await self.async_turn_off()
-        if (
-            await self.hass.async_add_executor_job(self.atrea.getProgram)
-            == AtreaProgram.WEEKLY
-        ):
-            self.atrea.setProgram(AtreaProgram.TEMPORARY)
-        if mode != await self.hass.async_add_executor_job(self.atrea.getMode):
-            self.atrea.setMode(mode)
-
-        # cz26: výkon do STEJNÉ relace jako mód. Atrea vyžaduje oba příkazy
-        # najednou (jinak min. 5s interval mezi relacemi → lag, a jednotka se
-        # mezitím umí vypnout a čekat na výkon). Mapujeme úroveň (Min/Norm/Max)
-        # z výkonu PŘED přepnutím (initial_h10704_pre) do kódování nové
-        # předvolby a přidáme setPower do TÉHOŽ commands dictu → jeden exec
-        # pošle mód i výkon v jedné relaci.
-        if (
-            self._is_r5
-            and initial_h10704_pre is not None
-            and mode != AtreaMode.OFF
-        ):
-            preset_en = (
-                ALL_PRESET_LIST[mode] if mode < len(ALL_PRESET_LIST) else None
-            )
-            target_power = r5_map_power_to_preset(initial_h10704_pre, preset_en)
-            LOGGER.debug(
-                "R_5 preset switch: mód %s + výkon %s → %s (preset %s) v jedné relaci",
-                mode,
-                initial_h10704_pre,
-                target_power,
-                preset_en,
-            )
-            if target_power is not None:
-                self.atrea.setPower(int(target_power))
-
-        self.updatePending = True
-        await self.hass.async_add_executor_job(self.atrea.exec)
-        await self._coordinator.async_refresh()
-        await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-        self.manualUpdate()
-        self.updatePending = False
-
-        # cz23: konec operace — zhasnout „Přepínám"
-        self.data["switching"] = False
-        self._coordinator.async_update_listeners()
+        try:
+            # Porovnání s POŽADOVANÝM režimem (H10715), ne s fází H10705 —
+            # jinak by se v Automatu (fáze cirkulace) volba Cirkulace neodeslala.
+            if not self._is_rd5:
+                await self._send_legacy(self.atrea.setMode, mode)
+            elif int(mode) == self._required_mode():
+                LOGGER.debug("Předvolba %s už je nastavená", preset_mode)
+            else:
+                await self._send(self._mode_cmds(int(mode)))
+        finally:
+            self.data["switching"] = False
+            self._coordinator.async_update_listeners()
 
     async def async_set_temperature(self, **kwargs):
-        """Set new target temperature."""
         temperature = kwargs.get(ATTR_TEMPERATURE)
         if temperature is None:
             return
-        elif temperature >= 10 and temperature <= 40:
-            self.atrea.commands.clear()
-            self.atrea.setTemperature(temperature)
-            self.updatePending = True
-            await self.hass.async_add_executor_job(self.atrea.exec)
-            await self._coordinator.async_refresh()
-            await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
-            self.manualUpdate()
-            self.updatePending = False
+        if 10 <= temperature <= 40:
+            if not self._is_rd5:
+                await self._send_legacy(self.atrea.setTemperature, temperature)
+                return
+            await self._send(
+                rd5.build_write(self._status, "temp", int(round(temperature * 10)))
+            )
         else:
             LOGGER.warning(
                 "Chosen temperature=%s is incorrect. It needs to be between 10 and 40.",

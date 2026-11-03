@@ -26,11 +26,13 @@ from homeassistant.components.sensor import (
 from homeassistant.const import (
     UnitOfElectricPotential,
     UnitOfTemperature,
+    UnitOfTime,
     UnitOfVolumeFlowRate,
 )
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import slugify
 
+from . import rd5
 from .const import DOMAIN, LOGGER
 
 
@@ -40,6 +42,18 @@ VOLTAGE_SENSORS = [
         "key": "hp_voltage",
         "name": "Napětí TČ",
         "translation_key": "hp_voltage",
+    },
+    {
+        "register": "H10200",
+        "key": "m1_voltage",
+        "name": "Napětí ventilátoru M1",
+        "translation_key": "m1_voltage",
+    },
+    {
+        "register": "H10201",
+        "key": "m2_voltage",
+        "name": "Napětí ventilátoru M2",
+        "translation_key": "m2_voltage",
     },
 ]
 
@@ -102,6 +116,78 @@ TEMP_SENSORS = [
         "name": "Vnitřní teplota (IDA)",
         "translation_key": "inside_temp",
     },
+    {
+        "register": "I10213",
+        "key": "extract_temp",
+        "name": "Teplota odtah (ETA)",
+        "translation_key": "extract_temp",
+    },
+    {
+        "register": "I10214",
+        "key": "exhaust_temp",
+        "name": "Teplota odpadní (EHA)",
+        "translation_key": "exhaust_temp",
+    },
+    {
+        "register": "I11420",
+        "key": "outdoor_temp_avg",
+        "name": "Venkovní teplota průměrná",
+        "translation_key": "outdoor_temp_avg",
+    },
+]
+
+# Výčtové stavy: (registr, klíč, název, mapa hodnot, ikona)
+ENUM_SENSORS = [
+    {
+        "register": "H10705",
+        "key": "current_phase",
+        "name": "Aktuální fáze režimu",
+        "translation_key": "current_phase",
+        "labels": rd5.MODE_LABELS,
+        "icon": "mdi:fan-clock",
+    },
+    {
+        "register": "I11401",
+        "key": "season",
+        "name": "Sezóna",
+        "translation_key": "season",
+        "labels": rd5.SEASON_LABELS,
+        "icon": "mdi:sun-snowflake-variant",
+    },
+    {
+        "register": "H11401",
+        "key": "season_switch",
+        "name": "Přepínání TS/NTS",
+        "translation_key": "season_switch",
+        "labels": rd5.SEASON_SWITCH_LABELS,
+        "icon": "mdi:swap-horizontal",
+    },
+    {
+        "register": "H11431",
+        "key": "toda_avg_interval",
+        "name": "Interval průměrování T-ODA",
+        "translation_key": "toda_avg_interval",
+        "labels": rd5.TODA_AVG_LABELS,
+        "icon": "mdi:timer-outline",
+    },
+]
+
+# Provozní hodiny: 32bit low/high
+HOURS_SENSORS = [
+    {
+        "low": "H13500",
+        "high": "H13501",
+        "key": "m1_hours",
+        "name": "Provozní hodiny M1",
+        "translation_key": "m1_hours",
+    },
+    {
+        "low": "H13502",
+        "high": "H13503",
+        "key": "m2_hours",
+        "name": "Provozní hodiny M2",
+        "translation_key": "m2_hours",
+    },
 ]
 
 
@@ -136,6 +222,31 @@ async def async_setup_entry(hass, entry, async_add_entities):
     entities = [AtreaVoltageSensor(data, entry, spec) for spec in VOLTAGE_SENSORS]
     entities += [AtreaFlowSensor(data, entry, spec) for spec in FLOW_SENSORS]
     entities += [AtreaTemperatureSensor(data, entry, spec) for spec in TEMP_SENSORS]
+    status = data.get("status") or {}
+    entities += [
+        AtreaEnumSensor(data, entry, spec)
+        for spec in ENUM_SENSORS
+        if spec["register"] in status
+    ]
+    entities += [
+        AtreaHoursSensor(data, entry, spec)
+        for spec in HOURS_SENSORS
+        if spec["low"] in status
+    ]
+    if "H11402" in status:
+        entities.append(
+            AtreaTemperatureSensor(
+                data,
+                entry,
+                {
+                    "register": "H11402",
+                    "key": "season_temp",
+                    "name": "Teplota přepnutí TS/NTS",
+                    "translation_key": "season_temp",
+                    "unsigned": True,
+                },
+            )
+        )
     entities.append(AtreaForcedModeSensor(data, entry))
     async_add_entities(entities)
 
@@ -251,6 +362,7 @@ class AtreaTemperatureSensor(CoordinatorEntity, SensorEntity):
         self._attr_name = spec["name"]
         self._attr_translation_key = spec["translation_key"]
         self._attr_unique_id = slugify(f"atrea_{self._ip}_{spec['key']}")
+        self._unsigned = spec.get("unsigned", False)
 
     @property
     def native_value(self):
@@ -266,11 +378,53 @@ class AtreaTemperatureSensor(CoordinatorEntity, SensorEntity):
                 status.get(self._register),
             )
             return None
-        # Teplota = °C × 10. Vodičové venkovní čidlo „přetéká" pro záporné
-        # hodnoty > 1300 → korekce dle RD5 spec.
-        if raw > 1300:
-            return round((50 - (raw - 65036) / 10) * -1, 1)
-        return raw / 10
+        # Teplota = °C × 10 jako int16; 1260 (126,0 °C) = nepřipojené čidlo.
+        if self._unsigned:
+            return raw / 10
+        return rd5.decode_temp(raw)
+
+    @property
+    def available(self):
+        status = self._data.get("status")
+        if not status or self._register not in status:
+            return False
+        if self._unsigned:
+            return True
+        return rd5.decode_temp(status[self._register]) is not None
+
+    @property
+    def device_info(self):
+        # Share device with the climate entity so all Atrea entities cluster
+        # under one device card in HA UI.
+        return {"identifiers": {(DOMAIN, slugify(f"atrea_{self._ip}"))}}
+
+
+class AtreaEnumSensor(CoordinatorEntity, SensorEntity):
+    """Číselný registr zobrazený jako text (režim, sezóna, …)."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, data, entry, spec):
+        super().__init__(data["coordinator"])
+        self._data = data
+        self._register = spec["register"]
+        self._labels = spec["labels"]
+        self._ip = entry.data.get("ip_address")
+        self._attr_name = spec["name"]
+        self._attr_translation_key = spec["translation_key"]
+        self._attr_icon = spec.get("icon")
+        self._attr_unique_id = slugify(f"atrea_{self._ip}_{spec['key']}")
+
+    @property
+    def native_value(self):
+        raw = rd5.ival(self._data.get("status"), self._register)
+        if raw is None:
+            return None
+        return self._labels.get(raw, f"Stav {raw}")
+
+    @property
+    def extra_state_attributes(self):
+        return {"raw": rd5.ival(self._data.get("status"), self._register)}
 
     @property
     def available(self):
@@ -279,8 +433,39 @@ class AtreaTemperatureSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def device_info(self):
-        # Share device with the climate entity so all Atrea entities cluster
-        # under one device card in HA UI.
+        return {"identifiers": {(DOMAIN, slugify(f"atrea_{self._ip}"))}}
+
+
+class AtreaHoursSensor(CoordinatorEntity, SensorEntity):
+    """Provozní hodiny ventilátoru (32bit low + high·65536)."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_native_unit_of_measurement = UnitOfTime.HOURS
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_icon = "mdi:timer-cog-outline"
+
+    def __init__(self, data, entry, spec):
+        super().__init__(data["coordinator"])
+        self._data = data
+        self._low = spec["low"]
+        self._high = spec["high"]
+        self._ip = entry.data.get("ip_address")
+        self._attr_name = spec["name"]
+        self._attr_translation_key = spec["translation_key"]
+        self._attr_unique_id = slugify(f"atrea_{self._ip}_{spec['key']}")
+
+    @property
+    def native_value(self):
+        return rd5.decode_u32(self._data.get("status"), self._low, self._high)
+
+    @property
+    def available(self):
+        status = self._data.get("status")
+        return bool(status) and self._low in status
+
+    @property
+    def device_info(self):
         return {"identifiers": {(DOMAIN, slugify(f"atrea_{self._ip}"))}}
 
 
@@ -311,8 +496,12 @@ class AtreaForcedModeSensor(CoordinatorEntity, SensorEntity):
             raw = int(status["H10712"])
         except (TypeError, ValueError):
             return None
-        if raw == 0:
-            return "Nic"
+        if raw in rd5.FORCED_MODE_LABELS:
+            labels = self._data.get("userLabels") or {}
+            text_key = rd5.FORCED_MODE_TEXT_KEYS.get(raw)
+            if text_key and labels.get(text_key):
+                return f"{rd5.FORCED_MODE_LABELS[raw]} ({labels[text_key]})"
+            return rd5.FORCED_MODE_LABELS[raw]
         modes = getattr(self._atrea, "forcedModes", None)
         if modes:
             mode = modes.get(raw)
