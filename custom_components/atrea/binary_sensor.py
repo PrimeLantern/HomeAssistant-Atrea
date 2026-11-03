@@ -22,19 +22,33 @@ from homeassistant.util import slugify
 from .const import DOMAIN, LOGGER
 
 
-# Stavové příznaky, které NEJSOU porucha — jen „tenhle režim teď jde použít".
-# I11401 = jednotka sama hlásí, jestli jsou splněné podmínky pro Noční
-# předchlazení (rozdíl vnitřní/venkovní > 5 °C a požadovaná < aktuální vnitřní).
-# V RD5 dokumentaci ani ve web UI to nikde není vidět, přitom to rozhoduje:
-# když se předvolba zapne bez splněných podmínek, jednotka se VYPNE. Proto to
-# vystavujeme — je to strážce pro „pusť předchlazení" i pro budoucí „teď chlaď".
+# Stavové příznaky, které NEJSOU porucha.
+# I11401 = aktuální sezóna (0 = topná, 1 = netopná) — dle RD5 Modbus tabulky
+# i textů web UI („Aktuální sezóna"). Noční předchlazení je podle tabulky
+# režimů povolené jen při I11401=1, proto si entita ponechává původní klíč
+# (kvůli entity_id), ale význam je „netopná sezóna".
+# C10215 / C10216 = výstupy SE / SC — tepelné čerpadlo topí / chladí.
 STATUS_BINARY_SENSORS = [
     {
         "register": "I11401",
         "key": "night_precooling_available",
-        "name": "Noční předchlazení možné",
+        "name": "Netopná sezóna (předchlazení povoleno)",
         "translation_key": "night_precooling_available",
         "icon": "mdi:weather-night",
+    },
+    {
+        "register": "C10215",
+        "key": "hp_heating",
+        "name": "TČ topí (SE)",
+        "translation_key": "hp_heating",
+        "icon": "mdi:heat-pump",
+    },
+    {
+        "register": "C10216",
+        "key": "hp_cooling",
+        "name": "TČ chladí (SC)",
+        "translation_key": "hp_cooling",
+        "icon": "mdi:snowflake",
     },
 ]
 

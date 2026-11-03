@@ -12,6 +12,9 @@ from pyatrea import Atrea
 from .utils import update_listener
 from .const import DOMAIN, LOGGER, MIN_TIME_BETWEEN_SCANS
 
+# climate musí být první — select/number zapisují přes climate._send
+PLATFORMS = ["climate", "update", "binary_sensor", "button", "sensor", "select", "number"]
+
 
 async def async_migrate_entry(hass, config_entry: ConfigEntry):
     """Migrate old entry."""
@@ -31,7 +34,7 @@ async def async_migrate_entry(hass, config_entry: ConfigEntry):
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_unload_platforms(
-        entry, ["climate", "update", "binary_sensor", "button", "sensor"]
+        entry, PLATFORMS
     )
     return True
 
@@ -96,7 +99,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
         await hass.async_create_task(
             hass.config_entries.async_forward_entry_setups(
-                entry, ["climate", "update", "binary_sensor", "button", "sensor"]
+                entry, PLATFORMS
             )
         )
         return True
