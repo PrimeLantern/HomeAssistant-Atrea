@@ -5,9 +5,10 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+import requests
 from homeassistant.exceptions import ConfigEntryNotReady
-from pyatrea import Atrea
+from .client import AtreaClient as Atrea
 
 from . import rd5
 from .utils import update_listener
@@ -42,9 +43,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     async def async_update_data():
-        hass.data[DOMAIN][entry.entry_id]["status"] = await hass.async_add_executor_job(
-            atrea.getStatus, False
-        )
+        try:
+            status = await hass.async_add_executor_job(atrea.getStatus, False)
+        except requests.RequestException as err:
+            raise UpdateFailed(f"Jednotka Atrea neodpovídá: {err}") from err
+        if not status:
+            # Necháme poslední známý stav; další pokus proběhne v příštím intervalu.
+            raise UpdateFailed("Jednotka Atrea nevrátila stav (přihlášení se nezdařilo)")
+        hass.data[DOMAIN][entry.entry_id]["status"] = status
         hass.data[DOMAIN][entry.entry_id]["params"] = await hass.async_add_executor_job(
             atrea.getParams, False
         )
