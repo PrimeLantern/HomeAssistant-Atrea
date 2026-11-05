@@ -22,6 +22,7 @@ from homeassistant.const import (
     ATTR_TEMPERATURE,
 )
 from homeassistant.util import Throttle
+from homeassistant.exceptions import HomeAssistantError
 from typing import Callable
 from pyatrea import AtreaProgram, AtreaMode
 
@@ -494,13 +495,19 @@ class AtreaDevice(ClimateEntity):
             self.atrea.commands[reg] = f"{val:05}"
         self.updatePending = True
         try:
-            await self.hass.async_add_executor_job(self.atrea.exec)
+            ok = await self.hass.async_add_executor_job(self.atrea.exec)
             await self._coordinator.async_refresh()
             await self.hass.async_add_executor_job(time.sleep, UPDATE_DELAY / 1000)
+        except Exception as err:  # síť / jednotka neodpovídá
+            raise HomeAssistantError(f"Zápis do jednotky Atrea selhal: {err}") from err
         finally:
             self.updatePending = False
             self.atrea.commands.clear()
         self.manualUpdate()
+        if not ok:
+            raise HomeAssistantError(
+                "Jednotka Atrea příkaz nepřijala (přihlášení se nezdařilo), zkus to znovu."
+            )
 
     def _mode_cmds(self, mode):
         """Zápis režimu + výkon převedený do sady nového režimu (jedna relace)."""

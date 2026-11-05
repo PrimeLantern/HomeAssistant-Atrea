@@ -12,7 +12,7 @@ from .const import (
     DEFAULT_FAN_MODE_LIST,
     CONTROL_MODE_R_5,
 )
-from pyatrea import Atrea
+from .client import AtreaClient as Atrea
 
 
 @config_entries.HANDLERS.register(DOMAIN)

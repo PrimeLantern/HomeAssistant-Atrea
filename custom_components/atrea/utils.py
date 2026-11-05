@@ -1,4 +1,4 @@
-from pyatrea import Atrea
+from .client import AtreaClient as Atrea
 from .const import (
     LOGGER,
     DOMAIN,
