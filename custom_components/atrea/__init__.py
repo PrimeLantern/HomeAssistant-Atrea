@@ -50,6 +50,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
         if not status:
             # Necháme poslední známý stav; další pokus proběhne v příštím intervalu.
             raise UpdateFailed("Jednotka Atrea nevrátila stav (přihlášení se nezdařilo)")
+        if rd5.is_booting(status):
+            # Jednotka startuje a posílá nuly — nepřepisovat stav, entity
+            # budou do další úspěšné aktualizace nedostupné (mezera v grafu).
+            raise UpdateFailed("Jednotka Atrea startuje (všechny teploty 0)")
         hass.data[DOMAIN][entry.entry_id]["status"] = status
         hass.data[DOMAIN][entry.entry_id]["params"] = await hass.async_add_executor_job(
             atrea.getParams, False
@@ -82,6 +86,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
 
     if not status:
         raise ConfigEntryNotReady("Incorrect password or too many signed in users.")
+    elif rd5.is_booting(status):
+        raise ConfigEntryNotReady("Jednotka Atrea startuje (všechny teploty 0).")
     else:
         hass.data[DOMAIN] = {}
 

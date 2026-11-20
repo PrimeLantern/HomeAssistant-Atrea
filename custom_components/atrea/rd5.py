@@ -45,6 +45,9 @@ REG_WRITE = {"power": "H10708", "mode": "H10709", "temp": "H10710", "zone": "H10
 # Hodnota 126,0 °C = nepřipojené čidlo (TA2, TRk, …).
 TEMP_DISCONNECTED = 1260
 
+# Hlavní teplotní čidla (ODA, SUP, ETA, EHA, IDA).
+MAIN_TEMP_REGISTERS = ("I10211", "I10212", "I10213", "I10214", "I10215")
+
 # H10712 „Vnucený stav" — op ModeText z userCtrl.xml.
 FORCED_MODE_LABELS = {
     0: "Nic",
@@ -158,6 +161,26 @@ def decode_temp(raw):
     if raw >= 32768:
         raw -= 65536
     return round(raw / 10, 1)
+
+
+def is_booting(status):
+    """True, když jednotka startuje a místo měření posílá samé nuly.
+
+    Po restartu webserver odpovídá dřív, než řídicí deska načte čidla —
+    všechna hlavní teplotní čidla pak hlásí přesně 0. Takový stav nesmí
+    projít jako platná data (v grafu by se objevil skok na 0 °C).
+    Vyžadujeme aspoň 2 přítomná čidla, aby skutečná 0 °C na jediném
+    venkovním čidle nebyla vyhodnocena jako start.
+    """
+    if not status:
+        return False
+    present = [status[r] for r in MAIN_TEMP_REGISTERS if r in status]
+    if len(present) < 2:
+        return False
+    try:
+        return all(int(v) == 0 for v in present)
+    except (TypeError, ValueError):
+        return False
 
 
 def decode_u32(status, low_key, high_key):
