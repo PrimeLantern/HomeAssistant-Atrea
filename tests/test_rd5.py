@@ -81,3 +81,13 @@ def test_decode_label_js_escape():
     assert rd5.decode_label("Cel%C3%BD") == "Celý"  # UTF-8 percent-encoding
     assert rd5.decode_label("Obývák") == "Obývák"
     assert rd5.decode_labels({"Z3Text": "Cel%FD%20d%u016Fm"}) == {"Z3Text": "Celý dům"}
+
+
+def test_is_booting():
+    assert not rd5.is_booting(S)
+    zeros = dict(S, **{r: "0" for r in rd5.MAIN_TEMP_REGISTERS})
+    assert rd5.is_booting(zeros)
+    # Skutečná 0 °C na jednom čidle není start.
+    assert not rd5.is_booting(dict(S, I10211="0"))
+    assert not rd5.is_booting({"I10211": "0"})
+    assert not rd5.is_booting(None) and not rd5.is_booting({})

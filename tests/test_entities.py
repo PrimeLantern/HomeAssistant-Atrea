@@ -65,6 +65,15 @@ def install_stubs():
     cc.ClimateEntityFeature = enum.IntFlag(
         "ClimateEntityFeature", "TARGET_TEMPERATURE FAN_MODE PRESET_MODE TURN_OFF TURN_ON"
     )
+    class CoordinatorEntity:
+        def __init__(self, coordinator, *a, **k):
+            self.coordinator = coordinator
+
+        @property
+        def available(self):
+            return self.coordinator.last_update_success
+
+    sys.modules["homeassistant.helpers.update_coordinator"].CoordinatorEntity = CoordinatorEntity
     sys.modules["homeassistant.util"].slugify = lambda s: s.replace(".", "_").lower()
     sys.modules["homeassistant.util"].Throttle = lambda *_: (lambda f: f)
     # pyatrea: stačí enumy (shodné s knihovnou), síť se nepoužívá
@@ -113,6 +122,8 @@ class FakeAtrea:
 
 
 class FakeCoordinator:
+    last_update_success = True
+
     async def async_refresh(self):
         pass
 
@@ -244,3 +255,13 @@ def test_all_platforms_import():
     assert n.native_value == 0.5
     run(n.async_set_native_value(0.8))
     assert atrea.sent[-1] == {"H11318": "00008"}
+
+
+def test_sensor_unavailable_when_update_failed():
+    _, _, data = make()
+    t = {s["register"]: s for s in sensor.TEMP_SENSORS}
+    ida = sensor.AtreaTemperatureSensor(data, Entry(), t["I10215"])
+    assert ida.available and ida.native_value == 23.5
+    # Jednotka startuje/neodpovídá → coordinator hlásí neúspěch → mezera v grafu
+    data["coordinator"].last_update_success = False
+    assert not ida.available

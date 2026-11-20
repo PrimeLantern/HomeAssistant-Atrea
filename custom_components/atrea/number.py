@@ -80,6 +80,10 @@ class AtreaNumber(CoordinatorEntity, NumberEntity):
 
     @property
     def available(self):
+        # Neúspěšná aktualizace (jednotka neodpovídá / startuje) → nedostupné,
+        # aby graf ukázal mezeru místo poslední nebo nulové hodnoty.
+        if not super().available:
+            return False
         status = self._data.get("status")
         return bool(status) and self._register in status
 

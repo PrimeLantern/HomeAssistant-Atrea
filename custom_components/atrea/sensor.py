@@ -287,6 +287,10 @@ class AtreaVoltageSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def available(self):
+        # Neúspěšná aktualizace (jednotka neodpovídá / startuje) → nedostupné,
+        # aby graf ukázal mezeru místo poslední nebo nulové hodnoty.
+        if not super().available:
+            return False
         status = self._data.get("status")
         return bool(status) and self._register in status
 
@@ -335,6 +339,10 @@ class AtreaFlowSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def available(self):
+        # Neúspěšná aktualizace (jednotka neodpovídá / startuje) → nedostupné,
+        # aby graf ukázal mezeru místo poslední nebo nulové hodnoty.
+        if not super().available:
+            return False
         status = self._data.get("status")
         return bool(status) and self._register in status
 
@@ -385,6 +393,10 @@ class AtreaTemperatureSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def available(self):
+        # Neúspěšná aktualizace (jednotka neodpovídá / startuje) → nedostupné,
+        # aby graf ukázal mezeru místo poslední nebo nulové hodnoty.
+        if not super().available:
+            return False
         status = self._data.get("status")
         if not status or self._register not in status:
             return False
@@ -428,6 +440,10 @@ class AtreaEnumSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def available(self):
+        # Neúspěšná aktualizace (jednotka neodpovídá / startuje) → nedostupné,
+        # aby graf ukázal mezeru místo poslední nebo nulové hodnoty.
+        if not super().available:
+            return False
         status = self._data.get("status")
         return bool(status) and self._register in status
 
@@ -461,6 +477,10 @@ class AtreaHoursSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def available(self):
+        # Neúspěšná aktualizace (jednotka neodpovídá / startuje) → nedostupné,
+        # aby graf ukázal mezeru místo poslední nebo nulové hodnoty.
+        if not super().available:
+            return False
         status = self._data.get("status")
         return bool(status) and self._low in status
 
@@ -512,6 +532,10 @@ class AtreaForcedModeSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def available(self):
+        # Neúspěšná aktualizace (jednotka neodpovídá / startuje) → nedostupné,
+        # aby graf ukázal mezeru místo poslední nebo nulové hodnoty.
+        if not super().available:
+            return False
         status = self._data.get("status")
         return bool(status) and "H10712" in status
 
