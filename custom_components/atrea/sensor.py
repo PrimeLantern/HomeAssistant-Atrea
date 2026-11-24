@@ -248,6 +248,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
             )
         )
     entities.append(AtreaForcedModeSensor(data, entry))
+    if rd5.has_alarm_registers(status):
+        entities.append(AtreaAlarmsSensor(data, entry))
     async_add_entities(entities)
 
 
@@ -538,6 +540,56 @@ class AtreaForcedModeSensor(CoordinatorEntity, SensorEntity):
             return False
         status = self._data.get("status")
         return bool(status) and "H10712" in status
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, slugify(f"atrea_{self._ip}"))}}
+
+
+class AtreaAlarmsSensor(CoordinatorEntity, SensorEntity):
+    """Aktivní alarmy a upozornění (D11100..D11198, RD5 tab. 9).
+
+    Stav = počet aktivních poruch/upozornění (bez provozních info stavů jako
+    odmrazování nebo vysoký tarif). Atributy nesou čitelný seznam všeho, co
+    je aktivní, takže se dá zobrazit v Markdown kartě nebo poslat notifikací.
+    """
+
+    _attr_has_entity_name = True
+    _attr_name = "Aktivní alarmy"
+    _attr_translation_key = "active_alarms"
+    _attr_icon = "mdi:alert-circle-outline"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, data, entry):
+        super().__init__(data["coordinator"])
+        self._data = data
+        self._ip = entry.data.get("ip_address")
+        self._attr_unique_id = slugify(f"atrea_{self._ip}_active_alarms")
+
+    def _active(self):
+        return rd5.active_alarms(self._data.get("status"))
+
+    @property
+    def native_value(self):
+        return sum(1 for _reg, _label, info in self._active() if not info)
+
+    @property
+    def extra_state_attributes(self):
+        active = self._active()
+        alarms = [label for _r, label, info in active if not info]
+        infos = [label for _r, label, info in active if info]
+        return {
+            "alarms": alarms,
+            "info": infos,
+            "registers": [reg for reg, _l, _i in active],
+            "summary": ", ".join(alarms) if alarms else "Bez alarmů",
+        }
+
+    @property
+    def available(self):
+        if not super().available:
+            return False
+        return rd5.has_alarm_registers(self._data.get("status"))
 
     @property
     def device_info(self):

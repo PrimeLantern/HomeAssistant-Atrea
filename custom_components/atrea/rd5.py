@@ -379,3 +379,107 @@ def flow_for_value(status, value, group_hint=None):
     if vent is not None:
         out["ventilation"] = ival(status, f"H116{30 + vent}")
     return out
+
+
+# --------------------------------------------------------------------------
+# Alarmy a upozornění (RD5 Modbus tabulka, tab. 9 — D11100..D11198)
+# --------------------------------------------------------------------------
+ALARM_RANGE = range(11100, 11199)
+
+ALARM_LABELS = {
+    "D11100": "Přehřátí jednotky",
+    "D11101": "Nenastavená orientace",
+    "D11102": "Není nastaven ohřívač",
+    "D11103": "2. protimrazová ochrana",
+    "D11104": "Aktivní vstup STOP",
+    "D11105": "Porucha tlakového čidla DP1",
+    "D11106": "Porucha tlakového čidla DP2",
+    "D11107": "Porucha čidla TU1",
+    "D11108": "Porucha čidla TU2",
+    "D11109": "Porucha čidla TEa",
+    "D11110": "Porucha čidla TEb",
+    "D11111": "Porucha čidla TA2",
+    "D11112": "Porucha komunikace RD-IO",
+    "D11114": "Nevyrovnaný průtok",
+    "D11115": "1. protimrazová ochrana",
+    "D11116": "Porucha čidla vnitřní teploty",
+    "D11117": "Zamrzání rekuperátoru",
+    "D11118": "Odmrazování rekuperátoru",
+    "D11119": "Vysoký tarif",
+    "D11120": "Nedostatečný průtok",
+    "D11121": "Nedostatečný výkon 1. topení",
+    "D11122": "Zanesený filtr",
+    "D11123": "Alarm vstupu IN1",
+    "D11124": "Alarm vstupu IN2",
+    "D11125": "Alarm vstupu INk1/1",
+    "D11126": "Alarm vstupu INk2/1",
+    "D11127": "Alarm vstupu INk3/1",
+    "D11128": "Alarm vstupu INk4/1",
+    "D11129": "Alarm vstupu INk1/2",
+    "D11130": "Alarm vstupu INk2/2",
+    "D11131": "Alarm vstupu INk3/2",
+    "D11132": "Alarm vstupu INk4/2",
+    "D11140": "Neuvedená do provozu",
+    "D11141": "Chybí konfigurační soubor",
+    "D11142": "Náhradní konfigurační soubor",
+    "D11143": "Nedostatečný náběh ohřívače",
+    "D11144": "Nepovolená kombinace ohřívačů",
+    "D11145": "Porucha tlakového čidla DP1",
+    "D11146": "Porucha externího tlakového čidla",
+    "D11147": "Porucha desky RD5-K/1",
+    "D11148": "Porucha desky RD5-K/2",
+    "D11149": "Odmrazování TČ",
+    "D11150": "Porucha vstupu TRk1, modul 1",
+    "D11151": "Porucha vstupu TRk2, modul 1",
+    "D11152": "Porucha vstupu TRk3, modul 1",
+    "D11153": "Porucha vstupu TRk4, modul 1",
+    "D11154": "Porucha vstupu TRk5, modul 1",
+    "D11155": "Porucha vstupu TRk1, modul 2",
+    "D11156": "Porucha vstupu TRk2, modul 2",
+    "D11157": "Porucha vstupu TRk3, modul 2",
+    "D11158": "Porucha vstupu TRk4, modul 2",
+    "D11159": "Porucha vstupu TRk5, modul 2",
+    "D11160": "Probíhá aktualizace",
+    "D11162": "Chybná konfigurace chladiče",
+    "D11165": "Aktivní nouzový režim",
+    "D11166": "Protimrazová ochrana — kapilára",
+    "D11167": "Konfigurace protimrazové ochrany",
+    "D11168": "Nedokončený proces učení",
+    "D11169": "Porucha čidla T-ODA",
+    "D11170": "Porucha čidla T-ETA/T-IDA",
+    "D11171": "Chladič není k dispozici",
+    "D11172": "Ohřívač není k dispozici",
+    "D11173": "Aktivní odpařování",
+    "D11174": "Posílení výkonu při topení",
+    "D11175": "Chybné nastavení průtoků",
+    "D11183": "Interval výměny filtru",
+    "D11184": "Konfigurace testu filtru",
+}
+
+# Provozní stavy, které jednotka hlásí v tabulce alarmů, ale nejde o poruchu.
+# Zobrazují se v seznamu, jen nezapínají souhrnný „problem" senzor.
+ALARM_INFO = frozenset(
+    {"D11118", "D11119", "D11149", "D11160", "D11173", "D11174"}
+)
+
+
+def active_alarms(status):
+    """Seznam aktivních hlášení [(registr, text, je_info)] v pořadí registrů.
+
+    Registr z rozsahu D11100..D11198, který tabulka nepopisuje, ale je 1,
+    se vrátí jako „Neznámé hlášení Dxxxxx" — ať se neztratí.
+    """
+    out = []
+    if not status:
+        return out
+    for n in ALARM_RANGE:
+        reg = f"D{n}"
+        if ival(status, reg) != 1:
+            continue
+        label = ALARM_LABELS.get(reg, f"Neznámé hlášení {reg}")
+        out.append((reg, label, reg in ALARM_INFO))
+    return out
+
+
+def has_alarm_registers(status):
+    return bool(status) and any(f"D{n}" in status for n in ALARM_RANGE)

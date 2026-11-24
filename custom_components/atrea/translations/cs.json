@@ -89,6 +89,12 @@
       },
       "hp_cooling": {
         "name": "TČ chladí (SC)"
+      },
+      "any_alarm": {
+        "name": "Alarm"
+      },
+      "primary_heater_insufficient": {
+        "name": "Nedostatečný výkon 1. topení"
       }
     },
     "button": {
@@ -165,6 +171,9 @@
       },
       "season_temp": {
         "name": "Teplota přepnutí TS/NTS"
+      },
+      "active_alarms": {
+        "name": "Aktivní alarmy"
       }
     },
     "climate": {

@@ -91,3 +91,26 @@ def test_is_booting():
     assert not rd5.is_booting(dict(S, I10211="0"))
     assert not rd5.is_booting({"I10211": "0"})
     assert not rd5.is_booting(None) and not rd5.is_booting({})
+
+
+def test_alarms_fixture_clean():
+    # Export ze skutečné jednotky: žádný alarm v D11100..D11198 není aktivní.
+    assert rd5.has_alarm_registers(S)
+    assert rd5.active_alarms(S) == []
+
+
+def test_alarms_active_and_info():
+    st = dict(S)
+    st["D11122"] = "1"  # zanesený filtr
+    st["D11149"] = "1"  # odmrazování TČ = info, ne porucha
+    st["D11190"] = "1"  # v tabulce nepopsaný registr
+    assert rd5.active_alarms(st) == [
+        ("D11122", "Zanesený filtr", False),
+        ("D11149", "Odmrazování TČ", True),
+        ("D11190", "Neznámé hlášení D11190", False),
+    ]
+
+
+def test_alarms_empty_status():
+    assert rd5.active_alarms(None) == []
+    assert not rd5.has_alarm_registers({})
