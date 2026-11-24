@@ -3,6 +3,7 @@
 Z RD5 specs (tab.9 Alarmy a upozornění):
 - D11122 = Zanesený filtr (TR mode — tlakové čidlo přes filtr).
 - D11183 = Interval výměny filtru (Perioda mode — uplynul nastavený interval H10910).
+- D11121 = Nedostatečný výkon primárního ohřívače (u RK5 = TČ).
 - D11114 = Nevyrovnaný průtok (alarm) — jednotka se kvůli němu vypíná. Reset přes
   tlačítko C10005 (registr z odposlechu web UI; viz button.py).
 
@@ -19,6 +20,7 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import slugify
 
+from . import rd5
 from .const import DOMAIN, LOGGER
 
 
@@ -72,6 +74,14 @@ PROBLEM_BINARY_SENSORS = [
         "name": "Nevyrovnaný průtok",
         "translation_key": "unbalanced_flow",
     },
+    {
+        # Primární ohřívač = TČ (H10503=5). Hlásí, že TČ nestíhá dodat
+        # požadovaný výkon — typicky v mrazech, kdy jede na 10 V (H10207).
+        "register": "D11121",
+        "key": "primary_heater_insufficient",
+        "name": "Nedostatečný výkon 1. topení",
+        "translation_key": "primary_heater_insufficient",
+    },
 ]
 
 
@@ -84,6 +94,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
         AtreaStatusBinarySensor(data, entry, spec) for spec in STATUS_BINARY_SENSORS
     ]
     entities.append(AtreaSwitchingBinarySensor(data, entry))
+    if rd5.has_alarm_registers(data.get("status")):
+        entities.append(AtreaAnyAlarmBinarySensor(data, entry))
     async_add_entities(entities)
 
 
@@ -169,6 +181,50 @@ class AtreaSwitchingBinarySensor(CoordinatorEntity, BinarySensorEntity):
     @property
     def is_on(self):
         return bool(self._data.get("switching"))
+
+    @property
+    def device_info(self):
+        return {"identifiers": {(DOMAIN, slugify(f"atrea_{self._ip}"))}}
+
+
+class AtreaAnyAlarmBinarySensor(CoordinatorEntity, BinarySensorEntity):
+    """Souhrn: on, pokud je aktivní jakýkoli alarm/upozornění z tab. 9.
+
+    Provozní info stavy (odmrazování, vysoký tarif, aktualizace, …) se
+    nepočítají — viz rd5.ALARM_INFO. Seznam aktivních je v atributu alarms.
+    """
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_has_entity_name = True
+    _attr_name = "Alarm"
+    _attr_translation_key = "any_alarm"
+
+    def __init__(self, data, entry):
+        super().__init__(data["coordinator"])
+        self._data = data
+        self._ip = entry.data.get("ip_address")
+        self._attr_unique_id = slugify(f"atrea_{self._ip}_any_alarm")
+
+    def _alarms(self):
+        return [
+            label
+            for _reg, label, info in rd5.active_alarms(self._data.get("status"))
+            if not info
+        ]
+
+    @property
+    def is_on(self):
+        return bool(self._alarms())
+
+    @property
+    def extra_state_attributes(self):
+        return {"alarms": self._alarms()}
+
+    @property
+    def available(self):
+        if not super().available:
+            return False
+        return rd5.has_alarm_registers(self._data.get("status"))
 
     @property
     def device_info(self):
